@@ -1,11 +1,13 @@
-#!/usr/bin/env bash
+#!/bin/sh
 # mdpubs CLI installer (macOS + Linux).
 #
 #   curl -fsSL https://raw.githubusercontent.com/lsshawn/mdpubs-cli/main/install.sh | sh
 #
 # Downloads the right prebuilt binary from the latest GitHub release and installs
 # it to ~/.local/bin (no sudo). Override with MDPUBS_INSTALL_DIR=/usr/local/bin.
-set -euo pipefail
+#
+# POSIX sh (no bashisms): this is piped into `sh`, which is dash on many Linuxes.
+set -eu
 
 REPO="lsshawn/mdpubs-cli"
 INSTALL_DIR="${MDPUBS_INSTALL_DIR:-$HOME/.local/bin}"
