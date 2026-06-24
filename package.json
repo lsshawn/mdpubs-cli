@@ -1,0 +1,16 @@
+{
+  "name": "mdpubs-cli",
+  "version": "0.1.0",
+  "description": "Publish and update Markdown or HTML files to mdpubs from the command line. Agent-friendly (Claude Code / Hermes).",
+  "type": "module",
+  "bin": {
+    "mdpubs": "./src/cli.ts"
+  },
+  "scripts": {
+    "build": "bun build src/cli.ts --compile --outfile dist/mdpubs",
+    "start": "bun run src/cli.ts"
+  },
+  "engines": {
+    "bun": ">=1.0.0"
+  }
+}
