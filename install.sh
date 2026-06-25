@@ -44,7 +44,7 @@ tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT
 
 if command -v curl >/dev/null 2>&1; then
-  curl -fSL "$url" -o "$tmp" || err "download failed: $url"
+  curl -fsSL "$url" -o "$tmp" || err "download failed: $url"
 elif command -v wget >/dev/null 2>&1; then
   wget -qO "$tmp" "$url" || err "download failed: $url"
 else
