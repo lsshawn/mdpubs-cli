@@ -46,6 +46,23 @@ export function extractId(content: string, kind: FileKind): number | null {
 	return null
 }
 
+// Privacy markers:
+//   HTML:     <!-- mdpubs-is-private: true -->
+//   Markdown: mdpubs-is-private: true   (in frontmatter)
+const HTML_PRIVATE_RE = /<!--\s*mdpubs-is-private:\s*(true|false)\s*-->/i
+const FM_PRIVATE_RE = /^\s*mdpubs-is-private:\s*(true|false)\s*$/im
+
+/**
+ * Read the in-file privacy intent, or null if not declared (caller decides the
+ * default / lets a --private flag override).
+ */
+export function extractIsPrivate(content: string, kind: FileKind): boolean | null {
+	const re = kind === 'html' ? HTML_PRIVATE_RE : FM_PRIVATE_RE
+	const m = content.match(re)
+	if (!m) return null
+	return m[1].toLowerCase() === 'true'
+}
+
 /**
  * Return content with the pub id stamped in. If an id marker already exists
  * (even empty), it is updated in place; otherwise a new marker is inserted at the

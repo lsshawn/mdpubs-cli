@@ -24,7 +24,7 @@ import {
 	PUBLIC_BASE_URL,
 	type CliConfig,
 } from './config'
-import {detectKind, fileExtensionFor, extractId, stampId} from './identity'
+import {detectKind, fileExtensionFor, extractId, extractIsPrivate, stampId} from './identity'
 import {findLocalAssets} from './assets'
 import {runLogin, ensureAuth} from './onboard'
 import {
@@ -111,7 +111,12 @@ async function cmdPublish(flags: Flags): Promise<void> {
 	const assets = await findLocalAssets(content, path, kind)
 
 	const existingId = extractId(content, kind)
-	const common = {title, content, fileExtension, assets, isPrivate: flags.private, tags: flags.tags}
+	// Privacy: --private/--public flag wins; otherwise honour the in-file marker
+	// (HTML: <!-- mdpubs-is-private: true -->, markdown: mdpubs-is-private in
+	// frontmatter); otherwise leave undefined (server default).
+	const inFilePrivate = extractIsPrivate(content, kind)
+	const isPrivate = flags.private !== undefined ? flags.private : inFilePrivate ?? undefined
+	const common = {title, content, fileExtension, assets, isPrivate, tags: flags.tags}
 
 	try {
 		if (existingId) {

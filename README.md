@@ -86,7 +86,7 @@ mdpubs publish report.md
   - HTML: `<!-- mdpubs: 123 -->` near the top (after `<!DOCTYPE>` if present)
 - Subsequent runs **update** the same pub.
 - `--title` overrides the auto-detected title (`<title>`/`# H1`/filename).
-- `--private` creates/keeps the pub private.
+- `--private` creates/keeps the pub private (only the logged-in owner can view it). You can also declare privacy in the file: `mdpubs-is-private: true` in markdown frontmatter, or `<!-- mdpubs-is-private: true -->` in HTML. The `--private`/`--public` flag overrides the in-file marker.
 
 ### Local assets ride along
 
