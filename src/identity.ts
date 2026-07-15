@@ -63,6 +63,59 @@ export function extractIsPrivate(content: string, kind: FileKind): boolean | nul
 	return m[1].toLowerCase() === 'true'
 }
 
+// Signing markers (mdpubs-sign). The SERVER owns the authoritative parse; this
+// is a read-only mirror so the CLI can confirm a doc is signable and list its
+// signers back to the user after publishing.
+//   HTML:     <!-- mdpubs-sign: true -->
+//             <!-- mdpubs-signer: Name <email> -->
+//   Markdown: mdpubs-sign: true            (in frontmatter)
+//             mdpubs-signers: (a `- Name <email>` list, in frontmatter)
+const HTML_SIGN_RE = /<!--\s*mdpubs-sign:\s*true\s*-->/i
+// Matches both fixed (`mdpubs-signer:`) and open (`mdpubs-signer-open:`) markers.
+const HTML_SIGNER_RE = /<!--\s*mdpubs-signer(-open)?:\s*(.+?)\s*-->/gi
+const FM_SIGN_RE = /^\s*mdpubs-sign:\s*true\s*$/im
+
+export interface SignInfo {
+	enabled: boolean
+	signers: string[]
+}
+
+/**
+ * Detect whether a file opts into signing and list the raw signer entries. Open
+ * slots (unknown signer) are shown with an "(open)" suffix. Empty / disabled when
+ * not signable. Purely informational — the server validates.
+ */
+export function detectSignConfig(content: string, kind: FileKind): SignInfo {
+	const disabled: SignInfo = {enabled: false, signers: []}
+	const signers: string[] = []
+
+	if (kind === 'html') {
+		if (!HTML_SIGN_RE.test(content)) return disabled
+		let m: RegExpExecArray | null
+		HTML_SIGNER_RE.lastIndex = 0
+		while ((m = HTML_SIGNER_RE.exec(content)) !== null) {
+			const label = m[2].trim()
+			signers.push(m[1] ? `${label} (open)` : label)
+		}
+	} else {
+		const fm = content.match(FRONTMATTER_RE)
+		if (!fm || !FM_SIGN_RE.test(fm[1])) return disabled
+		const listMatch = fm[1].match(/^\s*mdpubs-signers:\s*\r?\n([\s\S]*?)(?=^\S|\Z)/im)
+		if (listMatch) {
+			const items = listMatch[1].matchAll(/^\s*-\s*(.+?)\s*$/gim)
+			for (const item of items) signers.push(item[1].replace(/^["']|["']$/g, '').trim())
+		}
+		const openMatch = fm[1].match(/^\s*mdpubs-signers-open:\s*\r?\n([\s\S]*?)(?=^\S|\Z)/im)
+		if (openMatch) {
+			const items = openMatch[1].matchAll(/^\s*-\s*(.+?)\s*$/gim)
+			for (const item of items) signers.push(`${item[1].replace(/^["']|["']$/g, '').trim()} (open)`)
+		}
+	}
+
+	if (signers.length === 0) return disabled
+	return {enabled: true, signers}
+}
+
 /**
  * Return content with the pub id stamped in. If an id marker already exists
  * (even empty), it is updated in place; otherwise a new marker is inserted at the

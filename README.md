@@ -97,13 +97,46 @@ Any local file the pub references is uploaded automatically:
 
 Remote references (`https://`, `//`, `data:`, Google Fonts, etc.) are left as-is. Only paths that exist on disk relative to the pub file are uploaded.
 
+### Signing documents (e-signatures)
+
+Turn an HTML pub into a signable document — no DocuSign, no account for signers. Declare it in the file:
+
+```html
+<!-- mdpubs-sign: true -->
+<!-- mdpubs-signer: Alice <alice@co.com> -->
+<!-- mdpubs-signer-open: Acme Corp (authorised signatory) -->
+<!-- mdpubs-sign-order: sequential -->   <!-- sequential (default) | parallel -->
+```
+
+Publish it and share the link. The public page shows a **Sign** button and draws-to-sign in the browser. There are two kinds of signer:
+
+- **Fixed** — `<!-- mdpubs-signer: Name <email> -->`. The signer must enter a name/email matching this entry. Use when you know who signs.
+- **Open** — `<!-- mdpubs-signer-open: Label -->`. Use when you **don't know** the exact person or email (e.g. "the other firm's authorised signatory"). Whoever holds the link fills the slot with **their own** name + email, both of which are recorded on the signature.
+
+Markdown pubs use frontmatter lists: `mdpubs-signers:` (fixed) and `mdpubs-signers-open:` (open).
+
+- **Order**: `sequential` (default) requires signers to sign in the listed order; `parallel` lets anyone sign anytime.
+- **Where signatures appear**: by default the signing UI is a floating button. To place a signing box **inline at the exact spot** in the document, drop an anchor where you want it:
+
+  ```html
+  <!-- mdpubs-sign-here: Alice -->                     <!-- matches a signer by name -->
+  <!-- mdpubs-sign-here: Acme Corp (authorised signatory) -->  <!-- an open slot's label -->
+  ```
+
+  The label ties the box to a signer (by name, or the open-slot label; falls back to anchor order). The anchor only marks *where* the box renders — signatures are stored against the document, **never written into its content**, so adding a signature never changes the signed hash (which would break earlier signatures). That's why placement uses an anchor rather than embedding the signature itself.
+- **Tamper-evident**: each signature binds to a SHA-256 of the exact signed content. On the **first** signature the pub **locks** — later edits that change the signed body are rejected (`409`). Duplicate the pub to make a new version.
+- **Audit trail**: every view, signature, and completion is recorded (timestamp + IP). Download the signed document as a PDF from the pub's floating controls.
+
+`mdpubs publish` prints the detected signers for a signable pub. Markdown pubs use frontmatter (`mdpubs-sign: true`, a `mdpubs-signers:` list) but signing is designed for HTML documents like contracts and NDAs.
+
 ## Agent usage (`--json`)
 
 Every command supports `--json` for deterministic parsing:
 
 ```bash
 mdpubs publish report.html --json
-# {"id":123,"url":"https://mdpubs.com/123","action":"created","assets":2}
+# {"id":123,"url":"https://mdpubs.com/123","action":"created","assets":2,
+#  "sign":{"enabled":true,"signers":["Alice <alice@co.com>","Bob <bob@co.com>"]}}
 ```
 
 Exit codes: `0` ok, `1` generic/usage error, `2` auth failed, `3` forbidden (e.g. plan limit), `4` not found. Errors go to stderr.

@@ -24,7 +24,7 @@ import {
 	PUBLIC_BASE_URL,
 	type CliConfig,
 } from './config'
-import {detectKind, fileExtensionFor, extractId, extractIsPrivate, stampId} from './identity'
+import {detectKind, fileExtensionFor, extractId, extractIsPrivate, stampId, detectSignConfig} from './identity'
 import {findLocalAssets} from './assets'
 import {runLogin, ensureAuth} from './onboard'
 import {
@@ -118,14 +118,18 @@ async function cmdPublish(flags: Flags): Promise<void> {
 	const isPrivate = flags.private !== undefined ? flags.private : inFilePrivate ?? undefined
 	const common = {title, content, fileExtension, assets, isPrivate, tags: flags.tags}
 
+	// Informational only: the server parses & enforces signing from content.
+	const sign = detectSignConfig(content, kind)
+
 	try {
 		if (existingId) {
 			const note = await updateNote(cfg, existingId, common)
 			out(
 				flags,
 				`Updated: ${publicUrl(cfg, note.id)}  (${assets.length} asset${assets.length === 1 ? '' : 's'})`,
-				{id: note.id, url: publicUrl(cfg, note.id), action: 'updated', assets: assets.length},
+				{id: note.id, url: publicUrl(cfg, note.id), action: 'updated', assets: assets.length, sign},
 			)
+			reportSign(flags, sign)
 		} else {
 			const note = await createNote(cfg, common)
 			// Stamp the new id back into the file so the next publish updates in place.
@@ -134,12 +138,21 @@ async function cmdPublish(flags: Flags): Promise<void> {
 			out(
 				flags,
 				`Published: ${publicUrl(cfg, note.id)}  (${assets.length} asset${assets.length === 1 ? '' : 's'}, id written to file)`,
-				{id: note.id, url: publicUrl(cfg, note.id), action: 'created', assets: assets.length},
+				{id: note.id, url: publicUrl(cfg, note.id), action: 'created', assets: assets.length, sign},
 			)
+			reportSign(flags, sign)
 		}
 	} catch (e) {
 		handleApiError(e)
 	}
+}
+
+/** Print a note that a pub is signable and who is on the signer list. */
+function reportSign(flags: Flags, sign: {enabled: boolean; signers: string[]}): void {
+	if (flags.json || !sign.enabled) return
+	process.stdout.write(
+		`  ✎ Signable — ${sign.signers.length} signer${sign.signers.length === 1 ? '' : 's'}: ${sign.signers.join(', ')}\n`,
+	)
 }
 
 async function cmdList(flags: Flags): Promise<void> {
@@ -287,7 +300,14 @@ Auth: the first time you publish, mdpubs walks you through pasting your API key
 --api-key. Use \`mdpubs logout\` to clear a saved key, \`mdpubs login\` to change it.
 
 The file remembers its pub id (markdown frontmatter / HTML comment), so
-re-running publish updates the same pub.`
+re-running publish updates the same pub.
+
+Signing (HTML pubs): add \`<!-- mdpubs-sign: true -->\` plus one
+\`<!-- mdpubs-signer: Name <email> -->\` per known signer, or
+\`<!-- mdpubs-signer-open: Label -->\` when the person/email is unknown (they enter
+their own on signing). Optional \`<!-- mdpubs-sign-order: sequential|parallel -->\`.
+Place the box inline with \`<!-- mdpubs-sign-here: Label -->\` at the signature spot.
+Publish prints the detected signers. Once anyone signs, the document locks.`
 
 async function main(): Promise<void> {
 	const [, , cmd, ...rest] = process.argv
