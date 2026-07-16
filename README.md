@@ -115,6 +115,20 @@ Publish it and share the link. The public page shows a **Sign** button and draws
 
 Markdown pubs use frontmatter lists: `mdpubs-signers:` (fixed) and `mdpubs-signers-open:` (open).
 
+**Custom fields**: name, email, and signed date are captured automatically. To collect more (e.g. a title), declare fields — every signer fills them in and they're stored with the signature and shown in the signed document:
+
+```html
+<!-- HTML -->
+<!-- mdpubs-signer-field: Title -->
+<!-- mdpubs-signer-field: Company -->
+```
+```yaml
+# Markdown frontmatter
+mdpubs-signer-fields:
+  - Title
+  - Company
+```
+
 - **Order**: `sequential` (default) requires signers to sign in the listed order; `parallel` lets anyone sign anytime.
 - **Where signatures appear**: by default the signing UI is a floating button. To place a signing box **inline at the exact spot** in the document, drop an anchor where you want it:
 

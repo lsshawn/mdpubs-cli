@@ -307,7 +307,8 @@ Signing (HTML pubs): add \`<!-- mdpubs-sign: true -->\` plus one
 \`<!-- mdpubs-signer-open: Label -->\` when the person/email is unknown (they enter
 their own on signing). Optional \`<!-- mdpubs-sign-order: sequential|parallel -->\`.
 Place the box inline with \`<!-- mdpubs-sign-here: Label -->\` at the signature spot.
-Publish prints the detected signers. Once anyone signs, the document locks.`
+Collect extra fields with \`<!-- mdpubs-signer-field: Title -->\` (name/email/date are
+automatic). Publish prints the detected signers. Once anyone signs, the doc locks.`
 
 async function main(): Promise<void> {
 	const [, , cmd, ...rest] = process.argv
