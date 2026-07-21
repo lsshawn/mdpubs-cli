@@ -125,13 +125,7 @@ async function cmdPublish(flags: Flags): Promise<void> {
 	try {
 		if (existingId) {
 			const note = await updateNote(cfg, existingId, common)
-			// The canonical id is the publicId; the file may still hold a legacy
-			// integer id, so re-stamp when it differs to migrate it in place.
 			const pub = note.publicId ?? String(note.id)
-			if (String(existingId) !== pub) {
-				const stamped = stampId(content, kind, pub)
-				if (stamped !== content) await Bun.write(path, stamped)
-			}
 			out(
 				flags,
 				`Updated: ${publicUrl(cfg, pub)}  (${assets.length} asset${assets.length === 1 ? '' : 's'})`,
