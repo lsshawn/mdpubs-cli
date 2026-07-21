@@ -27,22 +27,26 @@ export function fileExtensionFor(filename: string): string {
 	return 'md'
 }
 
-const HTML_ID_RE = /<!--\s*mdpubs:\s*(\d+)?\s*-->/i
+// The id is the note's publicId: an unguessable nanoid (alphabet A-Za-z0-9_-).
+// It is NOT numeric, so the capture must allow the full nanoid alphabet. Legacy
+// integer ids still match (digits are a subset) and the API accepts them during
+// the transition until the file is re-stamped with its publicId.
+const HTML_ID_RE = /<!--\s*mdpubs:\s*([\w-]+)?\s*-->/i
 // Frontmatter block at the very top: --- ... --- ; we look for an mdpubs key in it.
 const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---/
-const FM_ID_RE = /^\s*mdpubs:\s*(\d+)?\s*$/im
+const FM_ID_RE = /^\s*mdpubs:\s*([\w-]+)?\s*$/im
 
 /** Extract the existing pub id from a file's content, or null if none/empty. */
-export function extractId(content: string, kind: FileKind): number | null {
+export function extractId(content: string, kind: FileKind): string | null {
 	if (kind === 'html') {
 		const m = content.match(HTML_ID_RE)
-		if (m && m[1]) return parseInt(m[1], 10)
+		if (m && m[1]) return m[1]
 		return null
 	}
 	const fm = content.match(FRONTMATTER_RE)
 	if (!fm) return null
 	const idLine = fm[1].match(FM_ID_RE)
-	if (idLine && idLine[1]) return parseInt(idLine[1], 10)
+	if (idLine && idLine[1]) return idLine[1]
 	return null
 }
 
@@ -121,7 +125,7 @@ export function detectSignConfig(content: string, kind: FileKind): SignInfo {
  * (even empty), it is updated in place; otherwise a new marker is inserted at the
  * top in the kind-appropriate way.
  */
-export function stampId(content: string, kind: FileKind, id: number): string {
+export function stampId(content: string, kind: FileKind, id: string): string {
 	if (kind === 'html') {
 		if (HTML_ID_RE.test(content)) {
 			return content.replace(HTML_ID_RE, `<!-- mdpubs: ${id} -->`)

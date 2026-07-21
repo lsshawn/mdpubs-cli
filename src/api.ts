@@ -8,7 +8,11 @@ import type {LocalAsset} from './assets'
 import type {CliConfig} from './config'
 
 export interface NoteResponse {
+	// Internal autoincrement id. Enumerable — never use it in a public URL.
 	id: number
+	// Unguessable public identifier (nanoid). This is what gets stamped into files
+	// and used to build public URLs. Optional only to tolerate an older API build.
+	publicId?: string
 	title: string
 	fileExtension?: string
 	file_extension?: string
@@ -98,7 +102,8 @@ export async function createNote(
 
 export async function updateNote(
 	cfg: CliConfig,
-	id: number,
+	// publicId (string) going forward; number tolerated for legacy files until re-stamped.
+	id: string | number,
 	args: {
 		title: string
 		content: string
@@ -132,7 +137,7 @@ export async function listNotes(cfg: CliConfig): Promise<NoteResponse[]> {
 	return Array.isArray(body) ? body : (body.notes ?? [])
 }
 
-export async function deleteNote(cfg: CliConfig, id: number): Promise<void> {
+export async function deleteNote(cfg: CliConfig, id: string | number): Promise<void> {
 	const res = await fetch(`${cfg.apiUrl}/notes/${id}`, {
 		method: 'DELETE',
 		headers: authHeaders(cfg),

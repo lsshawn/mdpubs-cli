@@ -75,8 +75,9 @@ function out(flags: Flags, human: string, json: Record<string, unknown>): void {
 	else process.stdout.write(human + '\n')
 }
 
-function publicUrl(cfg: CliConfig, id: number): string {
-	// Public viewer lives at mdpubs.com/<id>; derive from api host if non-default.
+function publicUrl(cfg: CliConfig, id: string | number): string {
+	// Public viewer lives at mdpubs.com/<publicId>; derive from api host if non-default.
+	// `id` must be the unguessable publicId — never the enumerable integer id.
 	if (cfg.apiUrl.includes('api.mdpubs.com')) return `${PUBLIC_BASE_URL}/${id}`
 	// Local/dev: best-effort swap of api. -> empty, else just show api url path.
 	const guess = cfg.apiUrl.replace('//api.', '//').replace(/\/$/, '')
@@ -124,21 +125,29 @@ async function cmdPublish(flags: Flags): Promise<void> {
 	try {
 		if (existingId) {
 			const note = await updateNote(cfg, existingId, common)
+			// The canonical id is the publicId; the file may still hold a legacy
+			// integer id, so re-stamp when it differs to migrate it in place.
+			const pub = note.publicId ?? String(note.id)
+			if (String(existingId) !== pub) {
+				const stamped = stampId(content, kind, pub)
+				if (stamped !== content) await Bun.write(path, stamped)
+			}
 			out(
 				flags,
-				`Updated: ${publicUrl(cfg, note.id)}  (${assets.length} asset${assets.length === 1 ? '' : 's'})`,
-				{id: note.id, url: publicUrl(cfg, note.id), action: 'updated', assets: assets.length, sign},
+				`Updated: ${publicUrl(cfg, pub)}  (${assets.length} asset${assets.length === 1 ? '' : 's'})`,
+				{id: pub, url: publicUrl(cfg, pub), action: 'updated', assets: assets.length, sign},
 			)
 			reportSign(flags, sign)
 		} else {
 			const note = await createNote(cfg, common)
-			// Stamp the new id back into the file so the next publish updates in place.
-			const stamped = stampId(content, kind, note.id)
+			// Stamp the new publicId back into the file so the next publish updates in place.
+			const pub = note.publicId ?? String(note.id)
+			const stamped = stampId(content, kind, pub)
 			if (stamped !== content) await Bun.write(path, stamped)
 			out(
 				flags,
-				`Published: ${publicUrl(cfg, note.id)}  (${assets.length} asset${assets.length === 1 ? '' : 's'}, id written to file)`,
-				{id: note.id, url: publicUrl(cfg, note.id), action: 'created', assets: assets.length, sign},
+				`Published: ${publicUrl(cfg, pub)}  (${assets.length} asset${assets.length === 1 ? '' : 's'}, id written to file)`,
+				{id: pub, url: publicUrl(cfg, pub), action: 'created', assets: assets.length, sign},
 			)
 			reportSign(flags, sign)
 		}
@@ -162,7 +171,12 @@ async function cmdList(flags: Flags): Promise<void> {
 		const notes = await listNotes(cfg)
 		if (flags.json) {
 			out(flags, '', {
-				notes: notes.map((n) => ({id: n.id, title: n.title, url: publicUrl(cfg, n.id), updatedAt: n.updatedAt})),
+				notes: notes.map((n) => ({
+					id: n.publicId ?? String(n.id),
+					title: n.title,
+					url: publicUrl(cfg, n.publicId ?? n.id),
+					updatedAt: n.updatedAt,
+				})),
 			} as any)
 			return
 		}
@@ -171,18 +185,20 @@ async function cmdList(flags: Flags): Promise<void> {
 			return
 		}
 		for (const n of notes) {
-			process.stdout.write(`${String(n.id).padStart(5)}  ${n.title || '(untitled)'}  ${publicUrl(cfg, n.id)}\n`)
+			const pub = n.publicId ?? String(n.id)
+			process.stdout.write(`${pub.padStart(12)}  ${n.title || '(untitled)'}  ${publicUrl(cfg, pub)}\n`)
 		}
 	} catch (e) {
 		handleApiError(e)
 	}
 }
 
-async function resolveId(flags: Flags, arg: string): Promise<number> {
-	if (/^\d+$/.test(arg)) return parseInt(arg, 10)
-	// Treat as a file: read its embedded id.
+async function resolveId(flags: Flags, arg: string): Promise<string> {
+	// An arg that isn't a path is taken as an id directly: either a publicId
+	// (nanoid) or a legacy integer id — the API accepts both during transition.
 	const file = Bun.file(arg)
-	if (!(await file.exists())) fail(`Not an id and file not found: ${arg}`)
+	if (!(await file.exists())) return arg
+	// Otherwise it's a file: read its embedded id.
 	const content = await file.text()
 	const id = extractId(content, detectKind(arg))
 	if (!id) fail(`File has no mdpubs id yet (publish it first): ${arg}`)
