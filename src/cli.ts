@@ -12,6 +12,7 @@
  *   mdpubs list [--json]
  *   mdpubs open <id|file>
  *   mdpubs delete <id|file> [--json]
+ *   mdpubs sign status|clear <id|file>
  *   mdpubs whoami [--json]
  *   mdpubs login [--api-key K] [--api-url U]
  */
@@ -21,10 +22,19 @@ import {
 	saveApiKey,
 	clearApiKey,
 	apiKeyFromEnv,
+	DEFAULT_API_URL,
 	PUBLIC_BASE_URL,
 	type CliConfig,
 } from './config'
-import {detectKind, fileExtensionFor, extractId, extractIsPrivate, stampId, detectSignConfig} from './identity'
+import {
+	detectKind,
+	fileExtensionFor,
+	extractId,
+	extractIsPrivate,
+	stampId,
+	detectSignConfig,
+	type SignInfo,
+} from './identity'
 import {findLocalAssets} from './assets'
 import {runLogin, ensureAuth} from './onboard'
 import {
@@ -32,8 +42,11 @@ import {
 	updateNote,
 	listNotes,
 	deleteNote,
+	getSignState,
+	clearSignatures,
 	ApiError,
 	type NoteResponse,
+	type SignState,
 } from './api'
 
 interface Flags {
@@ -44,6 +57,9 @@ interface Flags {
 	apiKey?: string
 	apiUrl?: string
 	noOpen?: boolean
+	slot?: number
+	all?: boolean
+	reason?: string
 	_: string[]
 }
 
@@ -59,6 +75,12 @@ function parseArgs(argv: string[]): Flags {
 		else if (a === '--api-key') f.apiKey = argv[++i]
 		else if (a === '--api-url') f.apiUrl = argv[++i]
 		else if (a === '--no-open') f.noOpen = true
+		else if (a === '--slot') {
+			const n = Number(argv[++i])
+			if (!Number.isInteger(n) || n < 0) fail('--slot takes a signer index (0, 1, …)')
+			f.slot = n
+		} else if (a === '--all') f.all = true
+		else if (a === '--reason') f.reason = argv[++i]
 		else if (a.startsWith('--')) fail(`Unknown flag: ${a}`)
 		else f._.push(a)
 	}
@@ -78,9 +100,12 @@ function out(flags: Flags, human: string, json: Record<string, unknown>): void {
 function publicUrl(cfg: CliConfig, id: string | number): string {
 	// Public viewer lives at mdpubs.com/<publicId>; derive from api host if non-default.
 	// `id` must be the unguessable publicId — never the enumerable integer id.
-	if (cfg.apiUrl.includes('api.mdpubs.com')) return `${PUBLIC_BASE_URL}/${id}`
-	// Local/dev: best-effort swap of api. -> empty, else just show api url path.
-	const guess = cfg.apiUrl.replace('//api.', '//').replace(/\/$/, '')
+	if (cfg.apiUrl === DEFAULT_API_URL) return `${PUBLIC_BASE_URL}/${id}`
+	// Local/dev: drop a trailing /api (http://localhost:5173/api) or an api. host.
+	const guess = cfg.apiUrl
+		.replace(/\/+$/, '')
+		.replace(/\/api$/, '')
+		.replace('//api.', '//')
 	return `${guess}/${id}`
 }
 
@@ -150,12 +175,28 @@ async function cmdPublish(flags: Flags): Promise<void> {
 	}
 }
 
-/** Print a note that a pub is signable and who is on the signer list. */
-function reportSign(flags: Flags, sign: {enabled: boolean; signers: string[]}): void {
+/**
+ * Print a note that a pub is signable, who is on the signer list, and warn about
+ * signer/anchor mismatches — a typo between the two silently drops that slot's
+ * inline box, so it is worth flagging at publish time.
+ */
+function reportSign(flags: Flags, sign: SignInfo): void {
 	if (flags.json || !sign.enabled) return
+	const n = sign.signers.length
 	process.stdout.write(
-		`  ✎ Signable — ${sign.signers.length} signer${sign.signers.length === 1 ? '' : 's'}: ${sign.signers.join(', ')}\n`,
+		`  ✎ Signable (${sign.order}) — ${n} signer${n === 1 ? '' : 's'}: ${sign.signers.join(', ')}\n`,
 	)
+	if (sign.fields.length) {
+		process.stdout.write(`    fields: ${sign.fields.join(', ')}\n`)
+	}
+	for (const s of sign.unanchoredSigners) {
+		process.stderr.write(
+			`    ! no <!-- mdpubs-sign-here: ${s} --> anchor; their box falls back to the floating panel\n`,
+		)
+	}
+	for (const a of sign.orphanAnchors) {
+		process.stderr.write(`    ! anchor "${a}" matches no declared signer\n`)
+	}
 }
 
 async function cmdList(flags: Flags): Promise<void> {
@@ -216,6 +257,61 @@ async function cmdDelete(flags: Flags): Promise<void> {
 	try {
 		await deleteNote(cfg, id)
 		out(flags, `Deleted ${id}`, {id, action: 'deleted'})
+	} catch (e) {
+		handleApiError(e)
+	}
+}
+
+function signerLine(s: SignState['signers'][number]): string {
+	const who = s.email ? `${s.name} <${s.email}>` : s.name
+	const status = s.signed
+		? `signed ${new Date(s.signedAt!).toISOString().slice(0, 16).replace('T', ' ')} UTC`
+		: s.isTurn
+			? 'waiting (their turn)'
+			: 'waiting'
+	return `  [${s.index}] ${who}${s.open ? ' (open slot)' : ''} — ${status}`
+}
+
+/** `mdpubs sign status|clear <id|file>`: read signing progress, or clear signatures to re-sign. */
+async function cmdSign(flags: Flags): Promise<void> {
+	const [sub, arg] = flags._
+	if ((sub !== 'status' && sub !== 'clear') || !arg) {
+		fail('Usage: mdpubs sign status <id|file>\n       mdpubs sign clear <id|file> (--slot N | --all) --reason "…"')
+	}
+	let cfg = await resolveConfig({apiKey: flags.apiKey, apiUrl: flags.apiUrl})
+	cfg = await ensureAuthOrFail(cfg, flags)
+	const id = await resolveId(flags, arg)
+
+	try {
+		if (sub === 'status') {
+			const state = await getSignState(cfg, id)
+			if (flags.json) return out(flags, '', {id, ...state})
+			if (!state.enabled) return out(flags, `${id} is not signable.`, {})
+			const done = state.signers.filter((s) => s.signed).length
+			const head = state.complete
+				? `Fully signed (${done}/${state.signers.length})`
+				: `${done}/${state.signers.length} signed, ${state.order}`
+			const lines = [`${id}: ${head}`, ...state.signers.map(signerLine)]
+			if (state.contentMatches === false) {
+				lines.push('  ! the body no longer matches what was signed; new signatures are blocked')
+			}
+			return out(flags, lines.join('\n'), {})
+		}
+
+		// clear: one slot or all of them, said explicitly, with a reason for the audit trail.
+		if (flags.slot === undefined && !flags.all) fail('Say which signature: --slot N, or --all.')
+		if (flags.slot !== undefined && flags.all) fail('Use --slot N or --all, not both.')
+		if (!flags.reason?.trim()) fail('--reason is required; it is recorded in the audit trail.')
+		const {voided, state} = await clearSignatures(cfg, id, {
+			signerIndex: flags.slot,
+			reason: flags.reason.trim(),
+		})
+		const human = [
+			`Cleared ${voided} signature${voided === 1 ? '' : 's'} on ${id}.` +
+				(flags.all ? ' The document is unlocked.' : ''),
+			...state.signers.map(signerLine),
+		].join('\n')
+		out(flags, human, {id, voided, ...state})
 	} catch (e) {
 		handleApiError(e)
 	}
@@ -301,6 +397,8 @@ Usage:
   mdpubs list [--json]
   mdpubs open <id|file> [--json]
   mdpubs delete <id|file> [--json]
+  mdpubs sign status <id|file> [--json]
+  mdpubs sign clear <id|file> (--slot N | --all) --reason "…" [--json]
   mdpubs whoami [--json]
   mdpubs login [--api-key <key>] [--api-url <url>] [--no-open]
   mdpubs logout
@@ -312,13 +410,36 @@ Auth: the first time you publish, mdpubs walks you through pasting your API key
 The file remembers its pub id (markdown frontmatter / HTML comment), so
 re-running publish updates the same pub.
 
-Signing (HTML pubs): add \`<!-- mdpubs-sign: true -->\` plus one
-\`<!-- mdpubs-signer: Name <email> -->\` per known signer, or
-\`<!-- mdpubs-signer-open: Label -->\` when the person/email is unknown (they enter
-their own on signing). Optional \`<!-- mdpubs-sign-order: sequential|parallel -->\`.
-Place the box inline with \`<!-- mdpubs-sign-here: Label -->\` at the signature spot.
-Collect extra fields with \`<!-- mdpubs-signer-field: Title -->\` (name/email/date are
-automatic). Publish prints the detected signers. Once anyone signs, the doc locks.`
+Signing works for both markdown and HTML pubs.
+
+  Markdown — in frontmatter:      HTML — comments near the top:
+    mdpubs-sign: true               <!-- mdpubs-sign: true -->
+    mdpubs-signers:                 <!-- mdpubs-signer: Name <email> -->
+      - Name <email>                <!-- mdpubs-signer-open: Label -->
+    mdpubs-signers-open:            <!-- mdpubs-signer-field: Title? -->
+      - Label                       <!-- mdpubs-sign-order: parallel -->
+    mdpubs-signer-fields:
+      - Title?
+    mdpubs-sign-order: parallel
+
+A signer entry may be \`Name <email>\` (email pre-filled), a bare email, or a bare
+\`Name\` (they supply their email when signing). An OPEN slot is for when you don't
+know who signs — whoever holds the link enters their own name and email.
+
+Fields: name/email/date are automatic; declare extras as above. A trailing \`?\`
+makes a field optional. Order defaults to \`sequential\` (sign in listed order);
+\`parallel\` lets anyone sign anytime.
+
+Place a signature box inline with \`<!-- mdpubs-sign-here: Label -->\` in the body,
+where Label matches a signer name or open-slot label; without an anchor the box
+appears in the floating panel. Publish prints the detected signers and warns on
+signer/anchor mismatches. Once anyone signs, the doc locks (later edits 409),
+and so does its signer list, order and fields.
+
+\`mdpubs sign status\` shows who has signed and whose turn it is. \`mdpubs sign
+clear\` voids a signature so the slot can be signed again, e.g. someone signed
+in the wrong box. --slot N clears one (the doc stays locked); --all clears every
+signature and unlocks the doc. Needs the note's author or an org owner/admin.`
 
 async function main(): Promise<void> {
 	const [, , cmd, ...rest] = process.argv
@@ -334,6 +455,8 @@ async function main(): Promise<void> {
 		case 'delete':
 		case 'rm':
 			return cmdDelete(flags)
+		case 'sign':
+			return cmdSign(flags)
 		case 'whoami':
 			return cmdWhoami(flags)
 		case 'login':

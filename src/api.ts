@@ -144,3 +144,46 @@ export async function deleteNote(cfg: CliConfig, id: string | number): Promise<v
 	})
 	if (!res.ok) throw await asError(res)
 }
+
+export interface SignSigner {
+	name: string
+	email: string
+	label?: string
+	index: number
+	signed: boolean
+	signedAt: number | null
+	isTurn: boolean
+	open?: boolean
+	fields?: Record<string, string> | null
+}
+
+export interface SignState {
+	enabled: boolean
+	order: 'sequential' | 'parallel'
+	signers: SignSigner[]
+	complete: boolean
+	started: boolean
+	contentMatches?: boolean
+}
+
+export async function getSignState(cfg: CliConfig, id: string): Promise<SignState> {
+	const res = await fetch(`${cfg.apiUrl}/notes/${id}/sign`, {headers: authHeaders(cfg)})
+	if (!res.ok) throw await asError(res)
+	return (await res.json()) as SignState
+}
+
+/** Clear one slot's signature, or every signature when `signerIndex` is undefined. */
+export async function clearSignatures(
+	cfg: CliConfig,
+	id: string,
+	args: {signerIndex?: number; reason: string},
+): Promise<{voided: number; state: SignState}> {
+	const q = new URLSearchParams({reason: args.reason})
+	if (args.signerIndex !== undefined) q.set('signerIndex', String(args.signerIndex))
+	const res = await fetch(`${cfg.apiUrl}/notes/${id}/sign?${q}`, {
+		method: 'DELETE',
+		headers: authHeaders(cfg),
+	})
+	if (!res.ok) throw await asError(res)
+	return (await res.json()) as {voided: number; state: SignState}
+}

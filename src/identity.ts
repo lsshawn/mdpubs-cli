@@ -75,13 +75,43 @@ export function extractIsPrivate(content: string, kind: FileKind): boolean | nul
 //   Markdown: mdpubs-sign: true            (in frontmatter)
 //             mdpubs-signers: (a `- Name <email>` list, in frontmatter)
 const HTML_SIGN_RE = /<!--\s*mdpubs-sign:\s*true\s*-->/i
-// Matches both fixed (`mdpubs-signer:`) and open (`mdpubs-signer-open:`) markers.
+// Matches fixed (`mdpubs-signer:`) and open (`mdpubs-signer-open:`) markers.
+// `mdpubs-signer-field:` does not match — the colon must follow immediately.
 const HTML_SIGNER_RE = /<!--\s*mdpubs-signer(-open)?:\s*(.+?)\s*-->/gi
+const HTML_FIELD_RE = /<!--\s*mdpubs-signer-field:\s*(.+?)\s*-->/gi
+const HTML_ORDER_RE = /<!--\s*mdpubs-sign-order:\s*(sequential|parallel)\s*-->/i
 const FM_SIGN_RE = /^\s*mdpubs-sign:\s*true\s*$/im
+const FM_ORDER_RE = /^\s*mdpubs-sign-order:\s*(sequential|parallel)\s*$/im
+
+/** Pull the `- item` entries out of a frontmatter block list, e.g. `mdpubs-signers:`. */
+function frontmatterList(block: string, key: string): string[] {
+	const m = block.match(new RegExp(`^\\s*${key}:\\s*\\r?\\n([\\s\\S]*?)(?=^\\S|\\Z)`, 'im'))
+	if (!m) return []
+	return [...m[1].matchAll(/^\s*-\s*(.+?)\s*$/gim)].map((i) =>
+		i[1].replace(/^["']|["']$/g, '').trim(),
+	)
+}
+
+/** Anchors in the body that place a signature box: `<!-- mdpubs-sign-here: Label -->`. */
+const SIGN_HERE_RE = /<!--\s*mdpubs-sign-here:\s*(.*?)\s*-->/gi
 
 export interface SignInfo {
 	enabled: boolean
 	signers: string[]
+	/** Signing order. Server default is `sequential` when unspecified. */
+	order: 'sequential' | 'parallel'
+	/** Extra fields collected at signing; a trailing `?` means optional. */
+	fields: string[]
+	/** Labels found on `mdpubs-sign-here` anchors, in document order. */
+	anchors: string[]
+	/** Signers with no matching anchor, and anchors matching no signer. */
+	unanchoredSigners: string[]
+	orphanAnchors: string[]
+}
+
+/** Compare a signer label to an anchor label: case/whitespace-insensitive. */
+function normLabel(s: string): string {
+	return s.trim().toLowerCase().replace(/\s+/g, ' ')
 }
 
 /**
@@ -90,34 +120,73 @@ export interface SignInfo {
  * not signable. Purely informational — the server validates.
  */
 export function detectSignConfig(content: string, kind: FileKind): SignInfo {
-	const disabled: SignInfo = {enabled: false, signers: []}
+	const disabled: SignInfo = {
+		enabled: false,
+		signers: [],
+		order: 'sequential',
+		fields: [],
+		anchors: [],
+		unanchoredSigners: [],
+		orphanAnchors: [],
+	}
+	// Raw slot labels (no "(open)" suffix) — these are what anchors join against.
+	const labels: string[] = []
 	const signers: string[] = []
+	const fields: string[] = []
+	// Server default when no order is declared.
+	let order: 'sequential' | 'parallel' = 'sequential'
 
 	if (kind === 'html') {
 		if (!HTML_SIGN_RE.test(content)) return disabled
+		const om = content.match(HTML_ORDER_RE)
+		if (om) order = om[1].toLowerCase() as 'sequential' | 'parallel'
+
 		let m: RegExpExecArray | null
 		HTML_SIGNER_RE.lastIndex = 0
 		while ((m = HTML_SIGNER_RE.exec(content)) !== null) {
 			const label = m[2].trim()
+			labels.push(label)
 			signers.push(m[1] ? `${label} (open)` : label)
 		}
+		HTML_FIELD_RE.lastIndex = 0
+		while ((m = HTML_FIELD_RE.exec(content)) !== null) fields.push(m[1].trim())
 	} else {
 		const fm = content.match(FRONTMATTER_RE)
 		if (!fm || !FM_SIGN_RE.test(fm[1])) return disabled
-		const listMatch = fm[1].match(/^\s*mdpubs-signers:\s*\r?\n([\s\S]*?)(?=^\S|\Z)/im)
-		if (listMatch) {
-			const items = listMatch[1].matchAll(/^\s*-\s*(.+?)\s*$/gim)
-			for (const item of items) signers.push(item[1].replace(/^["']|["']$/g, '').trim())
+		const block = fm[1]
+		const om = block.match(FM_ORDER_RE)
+		if (om) order = om[1].toLowerCase() as 'sequential' | 'parallel'
+
+		for (const s of frontmatterList(block, 'mdpubs-signers')) {
+			labels.push(s)
+			signers.push(s)
 		}
-		const openMatch = fm[1].match(/^\s*mdpubs-signers-open:\s*\r?\n([\s\S]*?)(?=^\S|\Z)/im)
-		if (openMatch) {
-			const items = openMatch[1].matchAll(/^\s*-\s*(.+?)\s*$/gim)
-			for (const item of items) signers.push(`${item[1].replace(/^["']|["']$/g, '').trim()} (open)`)
+		for (const s of frontmatterList(block, 'mdpubs-signers-open')) {
+			labels.push(s)
+			signers.push(`${s} (open)`)
 		}
+		fields.push(...frontmatterList(block, 'mdpubs-signer-fields'))
 	}
 
 	if (signers.length === 0) return disabled
-	return {enabled: true, signers}
+
+	// Anchors are matched against slot labels. For a named signer written as
+	// `Name <email>`, the anchor normally carries just the name, so accept either.
+	SIGN_HERE_RE.lastIndex = 0
+	const anchors = [...content.matchAll(SIGN_HERE_RE)].map((a) => a[1].trim()).filter(Boolean)
+	const anchorSet = new Set(anchors.map(normLabel))
+	const labelKeys = labels.map((l) => {
+		const bare = l.match(/^(.*?)\s*<[^>]+>$/)
+		return {full: normLabel(l), bare: bare ? normLabel(bare[1]) : normLabel(l)}
+	})
+	const unanchoredSigners = labels.filter(
+		(_, i) => !anchorSet.has(labelKeys[i].full) && !anchorSet.has(labelKeys[i].bare),
+	)
+	const orphanAnchors = anchors.filter(
+		(a) => !labelKeys.some((k) => k.full === normLabel(a) || k.bare === normLabel(a)),
+	)
+
+	return {enabled: true, signers, order, fields, anchors, unanchoredSigners, orphanAnchors}
 }
 
 /**

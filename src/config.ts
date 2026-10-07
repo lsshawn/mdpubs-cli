@@ -13,7 +13,13 @@
 import {homedir} from 'os'
 import {join} from 'path'
 
-export const DEFAULT_API_URL = 'https://api.mdpubs.com'
+export const DEFAULT_API_URL = 'https://mdpubs.com/api'
+/**
+ * The old API host. It still answers, but runs older code that lacks the
+ * newer routes (signing status, clearing a signature), so a config or env
+ * still pointing at it is read as the default.
+ */
+const LEGACY_API_URL = 'https://api.mdpubs.com'
 export const PUBLIC_BASE_URL = 'https://mdpubs.com'
 /** Where users get / regenerate their API key (web UI Account page). */
 export const ACCOUNT_URL = `${PUBLIC_BASE_URL}/account`
@@ -48,7 +54,8 @@ export async function resolveConfig(overrides: Partial<CliConfig> = {}): Promise
 		process.env.MDPUBS_API_URL ||
 		fromFile.apiUrl ||
 		DEFAULT_API_URL
-	return {apiKey, apiUrl: apiUrl.replace(/\/+$/, '')}
+	const trimmed = apiUrl.replace(/\/+$/, '')
+	return {apiKey, apiUrl: trimmed === LEGACY_API_URL ? DEFAULT_API_URL : trimmed}
 }
 
 export async function saveApiKey(apiKey: string, apiUrl?: string): Promise<string> {

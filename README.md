@@ -58,7 +58,7 @@ mdpubs login --api-key your_key          # saves to ~/.config/mdpubs/config.json
 # or pass --api-key on any command
 ```
 
-For a self-hosted/dev API: `export MDPUBS_API_URL=http://localhost:1323` (default is `https://api.mdpubs.com`).
+For a self-hosted/dev API: `export MDPUBS_API_URL=http://localhost:1323` (default is `https://mdpubs.com/api`).
 
 ## Commands
 
@@ -67,9 +67,27 @@ mdpubs publish <file> [--private] [--title T] [--tags a,b] [--json]
 mdpubs list [--json]
 mdpubs open <id|file> [--json]
 mdpubs delete <id|file> [--json]
+mdpubs sign status <id|file> [--json]
+mdpubs sign clear <id|file> (--slot N | --all) --reason "…" [--json]
 mdpubs whoami [--json]
 mdpubs login --api-key <key> [--api-url <url>]
 ```
+
+### sign
+
+```bash
+mdpubs sign status loe.md
+# abc123: 1/2 signed, sequential
+#   [0] Shawn — signed 2026-10-07 09:12 UTC
+#   [1] Rohas Tecnic — waiting (their turn)
+
+mdpubs sign clear loe.md --slot 1 --reason "Signed in the wrong box"
+```
+
+`clear --slot N` voids one signature so that slot can sign again; the doc stays
+locked. `clear --all` voids every signature and unlocks the doc for edits. The
+reason is recorded in the audit trail. Only the note's author or an owner/admin
+of its org can clear.
 
 ### publish
 
@@ -99,9 +117,20 @@ Remote references (`https://`, `//`, `data:`, Google Fonts, etc.) are left as-is
 
 ### Signing documents (e-signatures)
 
-Turn an HTML pub into a signable document — no DocuSign, no account for signers. Declare it in the file:
+Turn a markdown or HTML pub into a signable document — no DocuSign, no account for signers. Both formats are fully supported; declare it in the file:
+
+```yaml
+# Markdown — in the frontmatter block
+mdpubs-sign: true
+mdpubs-signers:
+  - Alice <alice@co.com>
+mdpubs-signers-open:
+  - Acme Corp (authorised signatory)
+mdpubs-sign-order: sequential   # sequential (default) | parallel
+```
 
 ```html
+<!-- HTML — comments near the top -->
 <!-- mdpubs-sign: true -->
 <!-- mdpubs-signer: Alice <alice@co.com> -->
 <!-- mdpubs-signer-open: Acme Corp (authorised signatory) -->
@@ -110,10 +139,8 @@ Turn an HTML pub into a signable document — no DocuSign, no account for signer
 
 Publish it and share the link. The public page shows a **Sign** button and draws-to-sign in the browser. There are two kinds of signer:
 
-- **Fixed** — `<!-- mdpubs-signer: Name <email> -->`. The signer must enter a name/email matching this entry. Use when you know who signs.
-- **Open** — `<!-- mdpubs-signer-open: Label -->`. Use when you **don't know** the exact person or email (e.g. "the other firm's authorised signatory"). Whoever holds the link fills the slot with **their own** name + email, both of which are recorded on the signature.
-
-Markdown pubs use frontmatter lists: `mdpubs-signers:` (fixed) and `mdpubs-signers-open:` (open).
+- **Fixed** — `mdpubs-signers:` / `<!-- mdpubs-signer: ... -->`. Written three ways: `Name <email>` pre-fills the email; a bare `email` uses it as the name too; a bare `Name` locks the name and lets the signer supply their own email at signing time (slots are identified by position, not email).
+- **Open** — `mdpubs-signers-open:` / `<!-- mdpubs-signer-open: Label -->`. Use when you **don't know** the exact person or email (e.g. "the other firm's authorised signatory"). Whoever holds the link fills the slot with **their own** name + email, both of which are recorded on the signature.
 
 **Custom fields**: name, email, and signed date are captured automatically. To collect more (e.g. a title), declare fields — every signer fills them in and they're stored with the signature and shown in the signed document:
 
@@ -141,7 +168,7 @@ mdpubs-signer-fields:
 - **Tamper-evident**: each signature binds to a SHA-256 of the exact signed content. On the **first** signature the pub **locks** — later edits that change the signed body are rejected (`409`). Duplicate the pub to make a new version.
 - **Audit trail**: every view, signature, and completion is recorded (timestamp + IP). Download the signed document as a PDF from the pub's floating controls.
 
-`mdpubs publish` prints the detected signers for a signable pub. Markdown pubs use frontmatter (`mdpubs-sign: true`, a `mdpubs-signers:` list) but signing is designed for HTML documents like contracts and NDAs.
+`mdpubs publish` prints the detected signers, order, and fields for a signable pub, and warns when a signer has no matching `mdpubs-sign-here` anchor (or an anchor matches no signer) — a typo between the two otherwise drops that slot's inline box silently.
 
 ## Agent usage (`--json`)
 
@@ -149,8 +176,12 @@ Every command supports `--json` for deterministic parsing:
 
 ```bash
 mdpubs publish report.html --json
-# {"id":123,"url":"https://mdpubs.com/123","action":"created","assets":2,
-#  "sign":{"enabled":true,"signers":["Alice <alice@co.com>","Bob <bob@co.com>"]}}
+# {"id":"y561oMTXUlCWUnE9-snyD","url":"https://mdpubs.com/y561oMTXUlCWUnE9-snyD",
+#  "action":"created","assets":2,
+#  "sign":{"enabled":true,"signers":["Alice <alice@co.com>","Acme Corp (open)"],
+#          "order":"parallel","fields":["Title?"],
+#          "anchors":["Alice","Acme Corp"],
+#          "unanchoredSigners":[],"orphanAnchors":[]}}
 ```
 
 Exit codes: `0` ok, `1` generic/usage error, `2` auth failed, `3` forbidden (e.g. plan limit), `4` not found. Errors go to stderr.
